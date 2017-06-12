@@ -1,0 +1,72 @@
+#!/bin/bash -l
+
+case $1 in
+  2.3) ruby_version=2.3.4 ;;
+  2.4) ruby_version=2.4.1 ;;
+esac
+#set -x -e
+
+unset GEM_HOME
+export GNUPGHOME="$OPENSHIFT_DATA_DIR"/gpg
+
+if [ ! -f "$OPENSHIFT_RUBY_DIR"/rvm/scripts/rvm ]; then
+  #echo "Installing mpapis public key"
+  mkdir -p "$GNUPGHOME"
+  chmod 700 "$GNUPGHOME"
+  \curl -sSL https://rvm.io/mpapis.asc | gpg --import -
+
+  #set +x +e
+  #echo "Installing RVM and Ruby"
+  \curl -sSL https://get.rvm.io | bash -s stable --path "$OPENSHIFT_RUBY_DIR"/rvm
+  mkdir -p $OPENSHIFT_HOME_DIR/.gem/bin
+
+  \sed -i "$OPENSHIFT_RUBY_DIR"/rvm/scripts/functions/detect_system -e 's/-RedHat/-CentOS/'
+  cat >> "$OPENSHIFT_RUBY_DIR"/rvm/scripts/functions/requirements/centos <<EOF
+  requirements_centos_before_update() { return 0; }
+  requirements_centos_libs_install() { return 0; }
+  requirements_centos_before_install_epel() { return 0; }
+  requirements_centos_before_update_check_epel() { return 0; }
+EOF
+fi
+
+#set +x +e
+. "$OPENSHIFT_RUBY_DIR"/rvm/scripts/rvm
+pushd $OPENSHIFT_RUBY_DIR/rvm
+\curl -O https://raw.githubusercontent.com/baip/openshift-ruby-cartridge/bin/rvm-ruby-${ruby_version}.tar.bz2 && tar xjf rvm-ruby-${ruby_version}.tar.bz2
+\rm -f rvm-ruby-${ruby_version}.tar.bz2
+\find rubies/ruby-${ruby_version}/ gems/ruby-${ruby_version}*/ -type f -exec \sed -i "s/0123456789ABCDEFGHIJKLMN/${OPENSHIFT_GEAR_UUID}/g" {} \;
+
+rvm use ${ruby_version}
+
+echo "${GEM_HOME}/wrappers" > "${OPENSHIFT_RUBY_DIR}/env/OPENSHIFT_RUBY_PATH_ELEMENT"
+
+for p in ${GEM_PATH//:/ }; do
+  ruby_path="${ruby_path}${p}/bin:"
+done
+ruby_path="${ruby_path}$(dirname $(which ruby)):$(dirname $(which rvm))"
+echo "${ruby_path}" > "${OPENSHIFT_RUBY_DIR}/env/RVM_PATH"
+echo "$GEM_HOME" > "${OPENSHIFT_RUBY_DIR}/env/RVM_GEM_HOME"
+echo "$GEM_PATH" > "${OPENSHIFT_RUBY_DIR}/env/RVM_GEM_PATH"
+
+#rvm use ruby-${ruby_version}
+#set -x -e
+
+resolv_rb="$OPENSHIFT_RUBY_DIR"/rvm/rubies/ruby-${ruby_version}/lib/ruby/${ruby_version/%.[0-9]/.0}/resolv.rb
+if ! \grep -q "OPENSHIFT_RUBY_IP" $resolv_rb; then
+    echo "Patching resolv.rb"
+    \sed -r -i -e 's/^( *def +self.bind_random_port.+)/\1\n      bind_host = ENV["OPENSHIFT_RUBY_IP"] || "0.0.0.0"/' \
+         -e 's/^( *bind_host *= *)"0.0.0.0"(.*)/\1ENV["OPENSHIFT_RUBY_IP"] || "0.0.0.0"\2/' $resolv_rb
+fi
+
+prespawn="$GEM_HOME"/gems/passenger-5.1.4/src/helper-scripts/prespawn
+if ! \grep -q "OPENSHIFT_RUBY_IP" $prespawn; then
+    \sed -r -i -e "s/'127.0.0.1'/ENV['OPENSHIFT_RUBY_IP'] || '127.0.0.1'/" $prespawn
+fi
+
+request_handler="$GEM_HOME"/gems/passenger-5.1.4/src/ruby_supportlib/phusion_passenger/request_handler.rb
+if ! \grep -q "OPENSHIFT_RUBY_IP" $request_handler; then
+    \sed -r -i -e "s/(TCPServer.new\( *)'127.0.0.1'/\1ENV['OPENSHIFT_RUBY_IP'] || '127.0.0.1'/" \
+         -e "s@tcp://127.0.0.1:@tcp://#{ENV['OPENSHIFT_RUBY_IP'] || '127.0.0.1' }:@" $request_handler
+fi
+
+#[ -f "$OPENSHIFT_RUBY_DIR"/rvm/gems/ruby-${ruby_version}/bin/bundle ] || gem install rake bundler --no-ri --no-rdoc

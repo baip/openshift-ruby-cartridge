@@ -7,6 +7,7 @@ function ruby_context {
     1.8) eval $1 ;;
     1.9) /usr/bin/scl enable ruby193 "$1" ;;
     2.0) /usr/bin/scl enable ruby200 ror40 "$1" ;;
+    *) GEM_HOME="$RVM_GEM_HOME" GEM_PATH="$RVM_GEM_PATH" PATH="${RVM_PATH}:${PATH}" eval $1 ;;
   esac
 }
 
@@ -28,5 +29,6 @@ function ruby_with_nodejs_context {
     1.8) $cmd "$1" ;;
     1.9) $cmd ruby193 "$1" ;;
     2.0) $cmd ruby200 ror40 "$1" ;;
+    *) GEM_HOME="$RVM_GEM_HOME" GEM_PATH="$RVM_GEM_PATH" PATH="${RVM_PATH}:${PATH}" $cmd "$1" ;;
   esac
 }
